@@ -34,6 +34,13 @@ DEFAULT_WINDOWS_USER_DATA_PATH = os.path.join(
     os.environ.get("APPDATA", os.path.expanduser("~")),
     "Cursor",
 )
+DEFAULT_MACOS_SYSTEM_INSTALL_PATH = "/Applications/Cursor.app"
+DEFAULT_MACOS_USER_INSTALL_PATH = os.path.expanduser("~/Applications/Cursor.app")
+DEFAULT_LINUX_INSTALL_PATHS = (
+    "/usr/share/cursor",
+    "/opt/Cursor",
+    "/opt/cursor",
+)
 
 if CURRENT_PLATFORM == 'windows':
     # 优先检查用户级安装，如果不存在则检查系统级安装
@@ -44,7 +51,17 @@ if CURRENT_PLATFORM == 'windows':
     else:
         CURSOR_INSTALL_PATH = DEFAULT_WINDOWS_USER_INSTALL_PATH  # 默认使用用户级路径
 elif CURRENT_PLATFORM == 'linux':
-    CURSOR_INSTALL_PATH = "/usr/share/cursor"
+    CURSOR_INSTALL_PATH = next(
+        (path for path in DEFAULT_LINUX_INSTALL_PATHS if os.path.exists(path)),
+        DEFAULT_LINUX_INSTALL_PATHS[0],
+    )
+elif CURRENT_PLATFORM == 'darwin':
+    if os.path.exists(DEFAULT_MACOS_SYSTEM_INSTALL_PATH):
+        CURSOR_INSTALL_PATH = DEFAULT_MACOS_SYSTEM_INSTALL_PATH
+    elif os.path.exists(DEFAULT_MACOS_USER_INSTALL_PATH):
+        CURSOR_INSTALL_PATH = DEFAULT_MACOS_USER_INSTALL_PATH
+    else:
+        CURSOR_INSTALL_PATH = DEFAULT_MACOS_SYSTEM_INSTALL_PATH
 else:
     CURSOR_INSTALL_PATH = "/usr/share/cursor"
 
@@ -54,11 +71,16 @@ if CURRENT_PLATFORM == 'windows':
     CURSOR_USER_DATA_PATH = DEFAULT_WINDOWS_USER_DATA_PATH
 elif CURRENT_PLATFORM == 'linux':
     CURSOR_USER_DATA_PATH = os.path.expanduser("~/.cursor")
+elif CURRENT_PLATFORM == 'darwin':
+    CURSOR_USER_DATA_PATH = os.path.expanduser("~/Library/Application Support/Cursor")
 else:
     CURSOR_USER_DATA_PATH = os.path.expanduser("~/.cursor")
 
-WORKBENCH_RELATIVE_DIR = os.path.join("resources", "app", "out", "vs", "code", "electron-sandbox", "workbench")
-WORKBENCH_SOURCE_RELATIVE_PATH = os.path.join("resources", "app", "out", "vs", "workbench", "workbench.desktop.main.js")
+APP_RELATIVE_DIR = os.path.join("resources", "app")
+MACOS_APP_RELATIVE_DIR = os.path.join("Contents", "Resources", "app")
+MACOS_CONTENTS_APP_RELATIVE_DIR = os.path.join("Resources", "app")
+WORKBENCH_RELATIVE_DIR = os.path.join("out", "vs", "code", "electron-sandbox", "workbench")
+WORKBENCH_SOURCE_RELATIVE_PATH = os.path.join("out", "vs", "workbench", "workbench.desktop.main.js")
 WORKBENCH_HTML_NAME = "workbench.html"
 TRANSLATION_JS_NAME = "cursor_hanhua.js"
 TRANSLATION_DICTIONARY_NAME = "cursor_translate_dic.txt"
@@ -549,9 +571,40 @@ def generate_js_code(translation_dictionary_data):
 '''
 
 
+def resolve_cursor_app_path(cursor_path):
+    """从安装入口路径解析到 Cursor 的 resources/app 目录。"""
+    expanded_path = os.path.abspath(os.path.expanduser(cursor_path))
+    base_name = os.path.basename(expanded_path)
+
+    candidate_paths = [expanded_path]
+    if expanded_path.lower().endswith(".app"):
+        candidate_paths.append(os.path.join(expanded_path, MACOS_APP_RELATIVE_DIR))
+    elif base_name == "Contents":
+        candidate_paths.append(os.path.join(expanded_path, MACOS_CONTENTS_APP_RELATIVE_DIR))
+    else:
+        candidate_paths.append(os.path.join(expanded_path, APP_RELATIVE_DIR))
+
+    for candidate_path in candidate_paths:
+        if os.path.exists(os.path.join(candidate_path, "product.json")):
+            return candidate_path
+
+    if expanded_path.lower().endswith(".app"):
+        return os.path.join(expanded_path, MACOS_APP_RELATIVE_DIR)
+    if base_name == "Contents":
+        return os.path.join(expanded_path, MACOS_CONTENTS_APP_RELATIVE_DIR)
+    if base_name.lower() == "app":
+        return expanded_path
+    return os.path.join(expanded_path, APP_RELATIVE_DIR)
+
+
+def get_cursor_app_path():
+    """获取 Cursor resources/app 目录完整路径。"""
+    return resolve_cursor_app_path(CURSOR_INSTALL_PATH)
+
+
 def get_workbench_dir():
     """获取 workbench 目录完整路径"""
-    return os.path.join(CURSOR_INSTALL_PATH, WORKBENCH_RELATIVE_DIR)
+    return os.path.join(get_cursor_app_path(), WORKBENCH_RELATIVE_DIR)
 
 
 def get_workbench_html_path():
@@ -561,7 +614,7 @@ def get_workbench_html_path():
 
 def get_workbench_source_path():
     """获取 Cursor 打包后的 workbench 主源码路径"""
-    return os.path.join(CURSOR_INSTALL_PATH, WORKBENCH_SOURCE_RELATIVE_PATH)
+    return os.path.join(get_cursor_app_path(), WORKBENCH_SOURCE_RELATIVE_PATH)
 
 
 def get_cursor_skills_dirs():
@@ -590,7 +643,7 @@ def get_workbench_backup_path():
 
 def get_product_json_path():
     """获取 product.json 完整路径"""
-    return os.path.join(CURSOR_INSTALL_PATH, "resources", "app", "product.json")
+    return os.path.join(get_cursor_app_path(), "product.json")
 
 
 def get_product_backup_path():
@@ -601,6 +654,10 @@ def get_product_backup_path():
 def get_default_install_path_hint():
     if CURRENT_PLATFORM == 'windows':
         return r"%LocalAppData%\Programs\cursor (用户级) 或 C:\Program Files\cursor (系统级)"
+    if CURRENT_PLATFORM == 'darwin':
+        return "/Applications/Cursor.app 或 ~/Applications/Cursor.app"
+    if CURRENT_PLATFORM == 'linux':
+        return "、".join(DEFAULT_LINUX_INSTALL_PATHS)
     return DEFAULT_CURSOR_INSTALL_PATH
 
 
@@ -663,27 +720,33 @@ def resolve_cursor_paths(custom_cursor_dir=None):
 
 
 def check_write_permission():
-    """检查是否有写入权限，特别是对于 Windows 系统级安装"""
-    if CURRENT_PLATFORM != 'windows':
-        return True
+    """检查关键文件所在目录是否可写。"""
+    paths_to_check = [
+        ("workbench 目录", get_workbench_dir()),
+        ("product.json 目录", os.path.dirname(get_product_json_path())),
+    ]
 
-    # 检查是否是系统级安装路径
-    if CURSOR_INSTALL_PATH == DEFAULT_WINDOWS_SYSTEM_INSTALL_PATH or CURSOR_INSTALL_PATH.startswith(r"C:\Program Files"):
-        # 尝试在安装目录创建临时文件来测试权限
-        test_file = os.path.join(CURSOR_INSTALL_PATH, ".write_test_temp")
+    checked_dirs = set()
+    for label, directory_path in paths_to_check:
+        normalized_dir = os.path.abspath(directory_path)
+        if normalized_dir in checked_dirs:
+            continue
+        checked_dirs.add(normalized_dir)
+
+        test_file = os.path.join(normalized_dir, ".cursor_translate_write_test")
         try:
             with open(test_file, 'w') as f:
                 f.write("test")
             os.remove(test_file)
-            return True
         except (PermissionError, OSError):
             print("\n[错误] 权限不足")
-            print(f"[路径] 当前安装目录: {CURSOR_INSTALL_PATH}")
-            print("[原因] 系统级安装需要管理员权限才能修改文件")
-            print("[解决] 请以管理员身份运行此脚本：")
-            print("       1. 右键点击 PowerShell 或命令提示符")
-            print("       2. 选择「以管理员身份运行」")
-            print("       3. 重新执行脚本命令")
+            print(f"[路径] {label}: {normalized_dir}")
+            if CURRENT_PLATFORM == 'windows':
+                print("[原因] 当前安装目录可能需要管理员权限才能修改文件")
+                print("[解决] 请以管理员身份运行 PowerShell 或命令提示符后重试")
+            else:
+                print("[原因] 当前安装目录可能需要更高权限才能修改文件")
+                print("[解决] 请使用 sudo 运行，或通过 --cursorDir 指定当前用户可写的 Cursor 安装目录")
             return False
 
     return True

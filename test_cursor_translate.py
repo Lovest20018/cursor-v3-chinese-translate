@@ -9,7 +9,11 @@ import os
 import json
 import shutil
 from CursorTranslate import (
+    APP_RELATIVE_DIR,
+    MACOS_APP_RELATIVE_DIR,
+    MACOS_CONTENTS_APP_RELATIVE_DIR,
     parse_translation_entry,
+    resolve_cursor_app_path,
     remove_injected_script,
     update_checksum,
     cleanup_legacy_language_pack,
@@ -189,6 +193,56 @@ class TestUpdateChecksum(unittest.TestCase):
             self.assertFalse(result, "check_checksum_key_exists should return False when key is missing")
         finally:
             CursorTranslate.CURSOR_INSTALL_PATH = original_path
+
+
+class TestCursorPathResolution(unittest.TestCase):
+    """测试跨平台 Cursor app 目录解析"""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def create_product_json(self, directory_path):
+        os.makedirs(directory_path, exist_ok=True)
+        product_json_path = os.path.join(directory_path, "product.json")
+        with open(product_json_path, 'w', encoding='utf-8') as file:
+            json.dump({"name": "Cursor"}, file)
+        return product_json_path
+
+    def test_resolve_windows_linux_install_root(self):
+        install_root = os.path.join(self.test_dir, "cursor")
+        app_path = os.path.join(install_root, APP_RELATIVE_DIR)
+        self.create_product_json(app_path)
+
+        self.assertEqual(resolve_cursor_app_path(install_root), app_path)
+
+    def test_resolve_direct_resources_app_path(self):
+        app_path = os.path.join(self.test_dir, "resources", "app")
+        self.create_product_json(app_path)
+
+        self.assertEqual(resolve_cursor_app_path(app_path), app_path)
+
+    def test_resolve_macos_app_bundle_path(self):
+        app_bundle_path = os.path.join(self.test_dir, "Cursor.app")
+        app_path = os.path.join(app_bundle_path, MACOS_APP_RELATIVE_DIR)
+        self.create_product_json(app_path)
+
+        self.assertEqual(resolve_cursor_app_path(app_bundle_path), app_path)
+
+    def test_resolve_macos_contents_path(self):
+        contents_path = os.path.join(self.test_dir, "Cursor.app", "Contents")
+        app_path = os.path.join(contents_path, MACOS_CONTENTS_APP_RELATIVE_DIR)
+        self.create_product_json(app_path)
+
+        self.assertEqual(resolve_cursor_app_path(contents_path), app_path)
+
+    def test_resolve_missing_macos_bundle_falls_back_to_bundle_app_path(self):
+        app_bundle_path = os.path.join(self.test_dir, "Missing.app")
+        expected_path = os.path.join(app_bundle_path, MACOS_APP_RELATIVE_DIR)
+
+        self.assertEqual(resolve_cursor_app_path(app_bundle_path), expected_path)
 
 
 class TestCleanupLegacyLanguagePack(unittest.TestCase):
