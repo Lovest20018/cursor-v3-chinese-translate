@@ -194,6 +194,10 @@
 
 "Auto-Approved Mode Transitions" => "自动批准的模式切换"
 "Mode transitions that will be automatically approved without prompting." => "无需提示即可自动批准的智能体模式切换。"
+"Always ask" => "始终询问"
+"Always run" => "始终运行"
+"Skip" => "跳过"
+"Switch" => "切换"
 
 "Browser Protection" => "浏览器保护"
 "Prevent Agent from automatically running Browser tools" => "禁止智能体自动运行浏览器工具"
