@@ -6,7 +6,7 @@
 - macOS：26.x / Apple Silicon arm64
 - Cursor：3.11.13
 - commit：`3f21b08f0b436a07be29fbfe00b304fa15553350`
-- 验收载体：`/tmp/cursor-v3-verify-311/Cursor.app`（自 `/Applications/Cursor.app` 复制，隔离 user-data）
+- 验收载体：本机 Cursor 3.11.13 的**可恢复副本**（隔离 user-data / extensions，不使用个人账号会话）
 
 ## 自动化结果
 
