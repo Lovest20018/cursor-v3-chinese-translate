@@ -73,10 +73,13 @@ class TestGenerateJsCode(unittest.TestCase):
     def test_generated_js_protects_exact_identifier_labels(self):
         """模型强度、套餐名和技术缩写等短标识即使误加词典也不应被翻译"""
         js_code = generate_js_code({protected_text: "误译" for protected_text in RUNTIME_PROTECTED_EXACT_TEXTS})
-        protected_exact_texts_json = json.dumps(RUNTIME_PROTECTED_EXACT_TEXTS, ensure_ascii=False)
+        protected_exact_texts_json = json.dumps(list(RUNTIME_PROTECTED_EXACT_TEXTS), ensure_ascii=False)
 
-        self.assertIn(f"const protectedExactTexts = new Set({protected_exact_texts_json});", js_code)
-        self.assertIn("protectedExactTexts.has(normalizeTranslationWhitespace(text))", js_code)
+        self.assertIn("protectedExactTexts", js_code)
+        self.assertIn(protected_exact_texts_json, js_code)
+        # 运行时在模型选择器 / 非自然语言上下文中保护这些标识
+        self.assertIn("model-provider-picker", js_code)
+        self.assertIn("protectedExactTexts.has", js_code)
 
 
 class TestRemoveInjectedScript(unittest.TestCase):
@@ -404,18 +407,13 @@ class TestCleanupLegacyLanguagePack(unittest.TestCase):
         import CursorTranslate
 
         with mock.patch.object(CursorTranslate, 'cleanup_legacy_language_pack') as mock_cleanup:
-            with mock.patch.object(CursorTranslate, 'validate_cursor_installation'):
-                with mock.patch.object(CursorTranslate, 'read_translation_dictionary', return_value={}):
-                    with mock.patch.object(CursorTranslate, 'is_already_injected', return_value=False):
-                        with mock.patch.object(CursorTranslate, 'create_backup'):
-                            with mock.patch.object(CursorTranslate, 'write_translation_js'):
-                                with mock.patch.object(CursorTranslate, 'inject_into_html'):
-                                    # 模拟 --apply 参数
-                                    with mock.patch('sys.argv', ['CursorTranslate.py', '--apply']):
-                                        try:
-                                            CursorTranslate.main()
-                                        except SystemExit:
-                                            pass
+            with mock.patch.object(CursorTranslate, 'run_apply', return_value=0) as mock_apply:
+                with mock.patch('sys.argv', ['CursorTranslate.py', '--apply', '--cursorDir=/tmp/fake-cursor']):
+                    try:
+                        CursorTranslate.main()
+                    except SystemExit:
+                        pass
+                mock_apply.assert_called()
 
             # 验证 cleanup_legacy_language_pack 没有被调用
             mock_cleanup.assert_not_called()

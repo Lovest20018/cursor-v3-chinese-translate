@@ -1363,9 +1363,6 @@
 "Show less" => "收起"
 "Unified workflow command collection — intent routing, minimal closed-loop chain selection, step-by-step execution. All 49 maestro commands in one skill." => "统一工作流命令集合 —— 意图路由、最小闭环链路选择和逐步执行。将 49 个 maestro 命令整合到一个技能中。"
 "CLI-first web research and source retrieval through the local smart-search command. Use when Codex needs current web search, source-backed fact checking, URL fetching, site mapping, official/API/documentation search, or reproducible search evidence via Skill + CLI instead of MCP tools." => "通过本地 smart-search 命令优先使用 CLI 进行网页研究和来源检索。当 Codex 需要当前网页搜索、基于来源的事实核查、URL 抓取、站点地图、官方/API/文档搜索，或需要通过技能 + CLI 而非 MCP 工具获取可复现搜索证据时使用。"
-"Use when you have a written implementation plan to execute in a separate session with review checkpoints" => "当你已有书面实现计划，并需要在独立会话中按审查检查点执行时使用。"
-"Use when executing implementation plans with independent tasks in the current session" => "在当前会话中执行包含独立任务的实现计划时使用。"
-"Use when you have a spec or requirements for a multi-step task, before touching code" => "当你已有多步骤任务的规格或需求，并且尚未改代码前使用。"
 "Resident pipeline supervisor agent. Message-driven lifecycle for cross-checkpoint quality observation and health monitoring." => "常驻流水线监督智能体。通过消息驱动的生命周期，对跨检查点质量进行观察并监控健康状态。"
 "Unified worker agent for team pipelines. Executes role-specific logic loaded from a role_spec file within a built-in task lifecycle (discover, execute, report)." => "团队流水线的统一工作智能体。在内置任务生命周期（发现、执行、报告）中，执行从 role_spec 文件加载的特定角色逻辑。"
 "Multi-dimensional analysis with evidence-based scoring and recommendations" => "基于证据评分和建议的多维分析"
@@ -1683,10 +1680,6 @@
 "Build" => "构建"
 
 # System Tray Menu
-"Recent Agents" => "最近的智能体"
-"Clear All Notifications" => "清除所有通知"
-"Open Cursor" => "打开 Cursor"
-"Quit" => "退出"
 
 # Context Menu
 "Copy as Markdown" => "复制为 Markdown"
@@ -1763,7 +1756,21 @@
 "Wait for MCP Authentication" => "等待 MCP 身份验证"
 "Wait indefinitely to authenticate when prompted. When off, skip authentication prompts after 30 seconds." => "提示身份验证时无限期等待。关闭后，将在 30 秒后跳过身份验证提示。"
 "Manage View" => "管理视图"
-"Home MCP Servers" => "主页 MCP 服务器"
 "Servers available from Home." => "可从主页使用的服务器。"
 "No Home MCP Tools" => "暂无主页 MCP 工具"
 "Add a custom MCP tool in your Home MCP config." => "在主页 MCP 配置中添加自定义 MCP 工具。"
+
+# [Cursor 3.11 Settings Navigation]
+"Git & PRs" => "Git 与 PR"
+"Browser & Network" => "浏览器与网络"
+"Search Settings" => "搜索设置"
+"Menu Bar Icon" => "菜单栏图标"
+"Show Cursor in menu bar" => "在菜单栏显示 Cursor"
+"Agent Layout" => "智能体布局"
+"Self-driving PRs" => "自动驾驶 PR"
+"Beta" => "测试版"
+"Profile" => "个人资料"
+"Open Customize" => "打开自定义"
+"Fun" => "趣味"
+"No results found." => "未找到结果。"
+"Run many agents in parallel" => "并行运行多个智能体"
