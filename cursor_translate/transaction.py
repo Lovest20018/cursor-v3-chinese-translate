@@ -1,0 +1,893 @@
+# -*- coding: utf-8 -*-
+"""版本化备份、事务式安装与恢复。"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import tempfile
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+from .bundle import (
+    PreflightReport,
+    build_paths,
+    preflight,
+    sha256_bytes,
+    sha256_file,
+)
+from .constants import (
+    BACKUP_SUFFIX,
+    CHECKSUM_KEY,
+    CURRENT_PLATFORM,
+    EXIT_CURSOR_RUNNING,
+    EXIT_ERROR,
+    EXIT_INCOMPATIBLE,
+    EXIT_NEEDS_RECOVERY,
+    EXIT_OK,
+    INJECTION_BEGIN,
+    INJECTION_END,
+    INJECTION_MARKER,
+    LEGACY_INJECTION_MARKER,
+    MANIFEST_SCHEMA_VERSION,
+    NATIVE_MENU_TRANSLATION_KEYS,
+    TOOL_MARKER,
+    TOOL_NAME,
+    TOOL_VERSION,
+    TRANSLATION_JS_NAME,
+)
+from .dictionary import DictionaryPayload, build_runtime_dictionary
+from .runtime import build_injection_block, generate_js_code
+
+
+class TransactionError(RuntimeError):
+    def __init__(self, message: str, exit_code: int = EXIT_ERROR):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+def backup_root_dir() -> str:
+    if CURRENT_PLATFORM == "darwin":
+        return os.path.expanduser(
+            "~/Library/Application Support/cursor-v3-chinese-translate/backups"
+        )
+    if CURRENT_PLATFORM == "windows":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "cursor-v3-chinese-translate", "backups")
+    xdg = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(xdg, "cursor-v3-chinese-translate", "backups")
+
+
+def bundle_identity(resources_app: str, version: Optional[str], commit: Optional[str]) -> str:
+    raw = f"{os.path.abspath(resources_app)}|{version or ''}|{commit or ''}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def ensure_dir(path: str, mode: int = 0o700) -> None:
+    os.makedirs(path, exist_ok=True)
+    try:
+        os.chmod(path, mode)
+    except Exception:
+        pass
+
+
+def atomic_write_bytes(path: str, data: bytes) -> None:
+    directory = os.path.dirname(path)
+    ensure_dir(directory, 0o755)
+    fd, tmp_path = tempfile.mkstemp(prefix=".cursor-v3-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # 尽量保留原权限
+        if os.path.exists(path):
+            try:
+                shutil.copymode(path, tmp_path)
+            except Exception:
+                pass
+        os.replace(tmp_path, path)
+        try:
+            dir_fd = os.open(directory, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except Exception:
+            pass
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+def atomic_write_text(path: str, text: str) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def compute_workbench_checksum(html_bytes: bytes) -> str:
+    return base64.b64encode(hashlib.sha256(html_bytes).digest()).decode("utf-8").rstrip("=")
+
+
+def update_product_checksum_text(product_text: str, checksum: str) -> str:
+    pattern = re.compile(r'("' + re.escape(CHECKSUM_KEY) + r'"\s*:\s*")([^"]*?)(")')
+    match = pattern.search(product_text)
+    if not match:
+        raise TransactionError(
+            f"product.json 缺少 checksum key: {CHECKSUM_KEY}",
+            EXIT_INCOMPATIBLE,
+        )
+    return product_text[: match.start(2)] + checksum + product_text[match.end(2) :]
+
+
+def insert_injection_code(html_content: str, injected_code: str) -> str:
+    body_close_index = html_content.rfind("</body>")
+    if body_close_index != -1:
+        updated = (
+            html_content[:body_close_index]
+            + "</body>\n"
+            + injected_code
+            + html_content[body_close_index + len("</body>") :]
+        )
+    else:
+        html_close_index = html_content.rfind("</html>")
+        if html_close_index == -1:
+            raise TransactionError("workbench.html 中未找到 </body> 或 </html>")
+        updated = (
+            html_content[:html_close_index]
+            + injected_code
+            + "\n</html>"
+            + html_content[html_close_index + len("</html>") :]
+        )
+    if INJECTION_MARKER not in updated:
+        raise TransactionError("注入完成后未检测到注入标记")
+    return updated
+
+
+def remove_tool_injection(html_content: str) -> str:
+    """移除本工具注入块；兼容 legacy marker。"""
+    patterns = [
+        re.compile(
+            r"\n?\t?" + re.escape(INJECTION_MARKER) + r".*?" + re.escape(INJECTION_END) + r"\n?",
+            re.DOTALL,
+        ),
+        re.compile(
+            r"\n?\t?" + re.escape(LEGACY_INJECTION_MARKER) +
+            r"(?:\n\t?<!-- Generated by " + re.escape(TOOL_MARKER) + r"[^>]*-->)?" +
+            r"\n\t?<script src=\"./" + re.escape(TRANSLATION_JS_NAME) + r"\"></script>\n?",
+            re.DOTALL,
+        ),
+        re.compile(
+            r"\n?\t?" + re.escape(INJECTION_MARKER) +
+            r"(?:\n\t?<!-- Generated by [^>]*-->)?" +
+            r"\n\t?<script src=\"./" + re.escape(TRANSLATION_JS_NAME) + r"\"></script>\n?",
+            re.DOTALL,
+        ),
+    ]
+    updated = html_content
+    removed = False
+    for pattern in patterns:
+        new_updated, count = pattern.subn("", updated, count=1)
+        if count:
+            updated = new_updated
+            removed = True
+            break
+    if not removed and (
+        INJECTION_MARKER in html_content or LEGACY_INJECTION_MARKER in html_content
+    ):
+        raise TransactionError("检测到不完整的注入标记，拒绝自动移除")
+    return updated
+
+
+def replace_native_resource_text(content: str, native_translations: Dict[str, str]) -> Tuple[str, int, List[Dict]]:
+    updated = content
+    count = 0
+    fragments = []
+    for source_text, translated_text in native_translations.items():
+        source_literal = json.dumps(source_text, ensure_ascii=False)
+        translated_literal = json.dumps(translated_text, ensure_ascii=False)
+        if source_literal not in updated:
+            continue
+        occurrences = updated.count(source_literal)
+        if occurrences != 1:
+            # 不唯一则跳过该词条，避免误伤
+            continue
+        updated = updated.replace(source_literal, translated_literal, 1)
+        count += 1
+        fragments.append(
+            {
+                "source": source_text,
+                "translated": translated_text,
+                "literal": source_literal,
+                "translated_literal": translated_literal,
+            }
+        )
+    return updated, count, fragments
+
+
+@dataclass
+class FileOp:
+    relative_path: str
+    absolute_path: str
+    action: str  # create|modify|delete|skip
+    original_sha256: Optional[str]
+    result_sha256: Optional[str]
+    original_exists: bool
+    backup_name: Optional[str] = None
+    fragments: List[Dict] = field(default_factory=list)
+
+
+@dataclass
+class PatchPlan:
+    manifest_id: str
+    resources_app: str
+    version: Optional[str]
+    commit: Optional[str]
+    operations: List[FileOp]
+    js_content: str
+    html_content: str
+    product_content: str
+    native_contents: Dict[str, str] = field(default_factory=dict)
+
+    def planned_paths(self) -> List[str]:
+        return [op.absolute_path for op in self.operations if op.action in {"create", "modify", "delete"}]
+
+
+class InstallTransaction:
+    def __init__(
+        self,
+        report: PreflightReport,
+        dictionary: DictionaryPayload,
+        *,
+        backup_root: Optional[str] = None,
+        dry_run: bool = False,
+    ):
+        self.report = report
+        self.dictionary = dictionary
+        self.backup_root = backup_root or backup_root_dir()
+        self.dry_run = dry_run
+        self.manifest_id = uuid.uuid4().hex
+        self.identity = bundle_identity(
+            report.resources_app, report.version, report.commit
+        )
+
+    def _manifest_dir(self) -> str:
+        return os.path.join(self.backup_root, self.identity, self.manifest_id)
+
+    def _active_pointer_path(self) -> str:
+        return os.path.join(self.backup_root, self.identity, "active.json")
+
+    def _lock_path(self) -> str:
+        return os.path.join(self.backup_root, self.identity, ".lock")
+
+    def acquire_lock(self) -> None:
+        ensure_dir(os.path.join(self.backup_root, self.identity))
+        lock_path = self._lock_path()
+        if os.path.exists(lock_path):
+            try:
+                with open(lock_path, "r", encoding="utf-8") as handle:
+                    meta = json.load(handle)
+                pid = meta.get("pid")
+                if pid and self._pid_alive(int(pid)):
+                    raise TransactionError(
+                        f"另一个安装事务正在运行 (pid={pid})",
+                        EXIT_ERROR,
+                    )
+            except TransactionError:
+                raise
+            except Exception:
+                pass
+            # 死锁可接管
+            try:
+                os.remove(lock_path)
+            except Exception:
+                pass
+        payload = {
+            "tool": TOOL_NAME,
+            "version": TOOL_VERSION,
+            "manifest_id": self.manifest_id,
+            "pid": os.getpid(),
+            "created_at": time.time(),
+        }
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        fd = os.open(lock_path, flags, 0o600)
+        try:
+            os.write(fd, json.dumps(payload).encode("utf-8"))
+        finally:
+            os.close(fd)
+
+    def release_lock(self) -> None:
+        try:
+            os.remove(self._lock_path())
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    def _lineage_originals(self) -> Dict[str, Dict]:
+        """读取当前活动 lineage 的 pre-first-apply 原始哈希/备份。"""
+        active = load_active_manifest(
+            self.report.resources_app,
+            self.report.version,
+            self.report.commit,
+            self.backup_root,
+        )
+        if not active or active.get("status") != "applied":
+            return {}
+        result = {}
+        for op in active.get("operations", []):
+            result[op["absolute_path"]] = op
+        # 指向首个 revision 的备份目录（lineage 根）
+        lineage_root = active.get("lineage_original_dir") or active.get("_manifest_dir")
+        return {"_ops": result, "_dir": lineage_root, "_manifest": active}
+
+    def build_plan(self) -> PatchPlan:
+        paths = self.report.paths
+        if not self.report.checksum_present:
+            raise TransactionError(
+                f"缺少 checksum key，零写入: {CHECKSUM_KEY}",
+                EXIT_INCOMPATIBLE,
+            )
+        if self.report.legacy_marker:
+            raise TransactionError(
+                "检测到 legacy 安装且无 v2 manifest，拒绝覆盖",
+                EXIT_NEEDS_RECOVERY,
+            )
+        if not os.path.isfile(paths.workbench_html):
+            raise TransactionError("workbench.html 不存在", EXIT_INCOMPATIBLE)
+        if not os.path.isfile(paths.product_json):
+            raise TransactionError("product.json 不存在", EXIT_INCOMPATIBLE)
+
+        with open(paths.workbench_html, "r", encoding="utf-8") as handle:
+            current_html = handle.read()
+        with open(paths.product_json, "r", encoding="utf-8") as handle:
+            current_product = handle.read()
+
+        lineage = self._lineage_originals()
+        lineage_ops = lineage.get("_ops", {}) if lineage else {}
+        lineage_dir = lineage.get("_dir") if lineage else None
+
+        # 先移除旧注入再注入，保证幂等；lineage 保留首次 apply 前原文
+        cleaned_html = current_html
+        if INJECTION_MARKER in current_html or LEGACY_INJECTION_MARKER in current_html:
+            cleaned_html = remove_tool_injection(current_html)
+
+        def resolve_original_text(abs_path: str, current_text: str, backup_name: str) -> Tuple[str, str]:
+            """返回 (original_text, original_sha)。"""
+            op = lineage_ops.get(abs_path)
+            if op and lineage_dir and op.get("backup_name"):
+                backup_path = os.path.join(lineage_dir, op["backup_name"])
+                if os.path.isfile(backup_path):
+                    with open(backup_path, "r", encoding="utf-8") as handle:
+                        text = handle.read()
+                    return text, op.get("original_sha256") or sha256_bytes(text.encode("utf-8"))
+            if op and op.get("original_sha256"):
+                # 无备份可读时退回当前（应少见）
+                return current_text, op["original_sha256"]
+            return current_text, sha256_bytes(current_text.encode("utf-8"))
+
+        original_html, original_html_sha = resolve_original_text(
+            paths.workbench_html, cleaned_html, "workbench.html"
+        )
+        # product 的 lineage 原文
+        original_product, original_product_sha = resolve_original_text(
+            paths.product_json, current_product, "product.json"
+        )
+
+        runtime_dict = build_runtime_dictionary(self.dictionary)
+        js_content = generate_js_code(runtime_dict, manifest_id=self.manifest_id)
+        injection = build_injection_block(self.manifest_id)
+        new_html = insert_injection_code(cleaned_html, injection)
+        html_bytes = new_html.encode("utf-8")
+        checksum = compute_workbench_checksum(html_bytes)
+        new_product = update_product_checksum_text(original_product, checksum)
+
+        operations: List[FileOp] = []
+        operations.append(
+            FileOp(
+                relative_path=os.path.relpath(paths.workbench_html, paths.resources_app),
+                absolute_path=paths.workbench_html,
+                action="modify",
+                original_sha256=original_html_sha,
+                result_sha256=sha256_bytes(html_bytes),
+                original_exists=True,
+                backup_name="workbench.html",
+            )
+        )
+
+        js_exists = os.path.isfile(paths.translation_js)
+        lineage_js = lineage_ops.get(paths.translation_js)
+        if js_exists:
+            try:
+                with open(paths.translation_js, "r", encoding="utf-8", errors="ignore") as handle:
+                    existing_js = handle.read(4096)
+                if (
+                    TOOL_NAME not in existing_js
+                    and "Cursor 汉化脚本" not in existing_js
+                    and "cursor-v3-chinese-translate" not in existing_js
+                ):
+                    raise TransactionError(
+                        f"cursor_hanhua.js 已存在且不属于本工具: {paths.translation_js}",
+                        EXIT_INCOMPATIBLE,
+                    )
+            except TransactionError:
+                raise
+            except Exception:
+                pass
+
+        # JS 在首次安装前不存在：lineage 中保持 original_exists=False
+        js_original_exists = bool(lineage_js and lineage_js.get("original_exists"))
+        operations.append(
+            FileOp(
+                relative_path=os.path.relpath(paths.translation_js, paths.resources_app),
+                absolute_path=paths.translation_js,
+                action="create" if not js_original_exists else "modify",
+                original_sha256=(
+                    lineage_js.get("original_sha256") if lineage_js else None
+                ),
+                result_sha256=sha256_bytes(js_content.encode("utf-8")),
+                original_exists=js_original_exists,
+                backup_name=(
+                    lineage_js.get("backup_name")
+                    if lineage_js and lineage_js.get("backup_name")
+                    else None
+                ),
+            )
+        )
+        operations.append(
+            FileOp(
+                relative_path=os.path.relpath(paths.product_json, paths.resources_app),
+                absolute_path=paths.product_json,
+                action="modify",
+                original_sha256=original_product_sha,
+                result_sha256=sha256_bytes(new_product.encode("utf-8")),
+                original_exists=True,
+                backup_name="product.json",
+            )
+        )
+
+        native_contents: Dict[str, str] = {}
+        native_translations = {
+            key: runtime_dict[key]
+            for key in NATIVE_MENU_TRANSLATION_KEYS
+            if key in runtime_dict and runtime_dict[key] != key
+        }
+        for label, abs_path in {
+            "main.js": paths.main_js,
+            "nls.messages.json": paths.nls_messages,
+        }.items():
+            if not os.path.isfile(abs_path) or not native_translations:
+                continue
+            with open(abs_path, "r", encoding="utf-8") as handle:
+                current_native = handle.read()
+            original_native, original_native_sha = resolve_original_text(
+                abs_path, current_native, os.path.basename(abs_path)
+            )
+            # 始终基于 lineage 原文重新应用，避免二次 apply 丢失原生菜单回滚点
+            updated, count, fragments = replace_native_resource_text(
+                original_native, native_translations
+            )
+            if count == 0 or updated == original_native:
+                # 若当前文件仍是我们上次的结果，保留 lineage 操作以便 restore
+                prev = lineage_ops.get(abs_path)
+                if prev and prev.get("original_sha256"):
+                    operations.append(
+                        FileOp(
+                            relative_path=os.path.relpath(abs_path, paths.resources_app),
+                            absolute_path=abs_path,
+                            action="modify",
+                            original_sha256=prev["original_sha256"],
+                            result_sha256=prev.get("result_sha256")
+                            or sha256_bytes(current_native.encode("utf-8")),
+                            original_exists=True,
+                            backup_name=prev.get("backup_name") or os.path.basename(abs_path),
+                            fragments=prev.get("fragments") or [],
+                        )
+                    )
+                continue
+            native_contents[abs_path] = updated
+            operations.append(
+                FileOp(
+                    relative_path=os.path.relpath(abs_path, paths.resources_app),
+                    absolute_path=abs_path,
+                    action="modify",
+                    original_sha256=original_native_sha,
+                    result_sha256=sha256_bytes(updated.encode("utf-8")),
+                    original_exists=True,
+                    backup_name=os.path.basename(abs_path),
+                    fragments=fragments,
+                )
+            )
+
+        # 供 apply 阶段复制 lineage 备份
+        self._lineage_dir = lineage_dir
+
+        return PatchPlan(
+            manifest_id=self.manifest_id,
+            resources_app=paths.resources_app,
+            version=self.report.version,
+            commit=self.report.commit,
+            operations=operations,
+            js_content=js_content,
+            html_content=new_html,
+            product_content=new_product,
+            native_contents=native_contents,
+        )
+
+    def apply(self) -> PatchPlan:
+        if self.report.cursor_running:
+            raise TransactionError("Cursor 仍在运行，拒绝写入", EXIT_CURSOR_RUNNING)
+        if self.report.exit_code not in {EXIT_OK} and self.report.status not in {
+            "ok",
+            "cursor-running",
+        }:
+            # cursor-running 上面已处理；其他预检失败
+            if self.report.exit_code != EXIT_OK and self.report.status != "ok":
+                if self.report.status not in {"ok"}:
+                    # 允许 foreign-backup 存在时继续
+                    if self.report.exit_code in {
+                        EXIT_INCOMPATIBLE,
+                        EXIT_NEEDS_RECOVERY,
+                    }:
+                        raise TransactionError(
+                            "; ".join(self.report.messages) or self.report.status,
+                            self.report.exit_code,
+                        )
+
+        plan = self.build_plan()
+        if self.dry_run:
+            return plan
+
+        self.acquire_lock()
+        written: List[Tuple[str, Optional[str]]] = []
+        manifest_dir = self._manifest_dir()
+        try:
+            ensure_dir(manifest_dir)
+            lineage_dir = getattr(self, "_lineage_dir", None)
+
+            # 备份原始文件：优先复制 lineage 中的 pre-first-apply 备份
+            for op in plan.operations:
+                if op.original_exists and op.backup_name:
+                    backup_path = os.path.join(manifest_dir, op.backup_name)
+                    source_backup = None
+                    if lineage_dir:
+                        candidate = os.path.join(lineage_dir, op.backup_name)
+                        if os.path.isfile(candidate):
+                            source_backup = candidate
+                    if source_backup:
+                        shutil.copy2(source_backup, backup_path)
+                    else:
+                        # 首次：从当前目标复制（调用方应保证当前仍是原文或已清理）
+                        if op.absolute_path.endswith("workbench.html"):
+                            # 使用清理注入后的内容作为备份语义；物理文件稍后写入
+                            # 这里从磁盘复制前先确认哈希
+                            shutil.copy2(op.absolute_path, backup_path)
+                            # 若磁盘仍含注入，用 original sha 对应内容覆盖
+                            if sha256_file(backup_path) != op.original_sha256:
+                                # 写回 plan 中记录的原文：从 cleaned 无法直接取，读 lineage 失败时用当前清理逻辑
+                                with open(op.absolute_path, "r", encoding="utf-8") as handle:
+                                    disk_html = handle.read()
+                                if INJECTION_MARKER in disk_html or LEGACY_INJECTION_MARKER in disk_html:
+                                    cleaned = remove_tool_injection(disk_html)
+                                    atomic_write_text(backup_path, cleaned)
+                        else:
+                            shutil.copy2(op.absolute_path, backup_path)
+                    try:
+                        os.chmod(backup_path, 0o600)
+                    except Exception:
+                        pass
+                    if op.original_sha256 and sha256_file(backup_path) != op.original_sha256:
+                        raise TransactionError(f"备份校验失败: {op.absolute_path}")
+
+            lineage_original_dir = lineage_dir or manifest_dir
+            manifest = {
+                "schema_version": MANIFEST_SCHEMA_VERSION,
+                "tool_name": TOOL_NAME,
+                "tool_version": TOOL_VERSION,
+                "manifest_id": plan.manifest_id,
+                "created_at": time.time(),
+                "bundle_identity": self.identity,
+                "resources_app": plan.resources_app,
+                "cursor_version": plan.version,
+                "cursor_commit": plan.commit,
+                "status": "prepared",
+                "lineage_original_dir": lineage_original_dir,
+                "operations": [
+                    {
+                        "relative_path": op.relative_path,
+                        "absolute_path": op.absolute_path,
+                        "action": op.action,
+                        "original_sha256": op.original_sha256,
+                        "result_sha256": op.result_sha256,
+                        "original_exists": op.original_exists,
+                        "backup_name": op.backup_name,
+                        "fragments": op.fragments,
+                    }
+                    for op in plan.operations
+                ],
+            }
+            atomic_write_text(
+                os.path.join(manifest_dir, "manifest.json"),
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+            )
+
+            # 再次确认 Cursor 未运行
+            rerun = preflight(plan.resources_app, require_not_running=True, for_apply=True)
+            if rerun.cursor_running:
+                raise TransactionError("写入前检测到 Cursor 正在运行", EXIT_CURSOR_RUNNING)
+
+            manifest["status"] = "applying"
+            atomic_write_text(
+                os.path.join(manifest_dir, "manifest.json"),
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+            )
+
+            paths = self.report.paths
+            # 写入顺序：js -> html -> native -> product
+            atomic_write_text(paths.translation_js, plan.js_content)
+            written.append((paths.translation_js, None if not os.path.exists(os.path.join(manifest_dir, "cursor_hanhua.js")) else os.path.join(manifest_dir, "cursor_hanhua.js")))
+
+            atomic_write_text(paths.workbench_html, plan.html_content)
+            written.append((paths.workbench_html, os.path.join(manifest_dir, "workbench.html")))
+
+            for abs_path, content in plan.native_contents.items():
+                atomic_write_text(abs_path, content)
+                written.append(
+                    (
+                        abs_path,
+                        os.path.join(manifest_dir, os.path.basename(abs_path)),
+                    )
+                )
+
+            atomic_write_text(paths.product_json, plan.product_content)
+            written.append((paths.product_json, os.path.join(manifest_dir, "product.json")))
+
+            # 验证
+            for op in plan.operations:
+                if op.action in {"create", "modify"}:
+                    actual = sha256_file(op.absolute_path)
+                    if actual != op.result_sha256:
+                        raise TransactionError(
+                            f"写入后哈希不匹配: {op.absolute_path}"
+                        )
+
+            manifest["status"] = "applied"
+            atomic_write_text(
+                os.path.join(manifest_dir, "manifest.json"),
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+            )
+            atomic_write_text(
+                self._active_pointer_path(),
+                json.dumps(
+                    {
+                        "manifest_id": plan.manifest_id,
+                        "status": "applied",
+                        "cursor_version": plan.version,
+                        "cursor_commit": plan.commit,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
+            return plan
+        except Exception as error:
+            # 回滚已写文件
+            for abs_path, backup_path in reversed(written):
+                try:
+                    if backup_path and os.path.isfile(backup_path):
+                        shutil.copy2(backup_path, abs_path)
+                    elif abs_path.endswith(TRANSLATION_JS_NAME) and os.path.isfile(abs_path):
+                        os.remove(abs_path)
+                except Exception:
+                    pass
+            try:
+                manifest_path = os.path.join(manifest_dir, "manifest.json")
+                if os.path.isfile(manifest_path):
+                    with open(manifest_path, "r", encoding="utf-8") as handle:
+                        manifest = json.load(handle)
+                    manifest["status"] = "rolled_back"
+                    manifest["error"] = str(error)
+                    atomic_write_text(
+                        manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2)
+                    )
+            except Exception:
+                pass
+            if isinstance(error, TransactionError):
+                raise
+            raise TransactionError(str(error), EXIT_ERROR) from error
+        finally:
+            self.release_lock()
+
+
+def load_active_manifest(resources_app: str, version: Optional[str], commit: Optional[str], backup_root: Optional[str] = None) -> Optional[Dict]:
+    root = backup_root or backup_root_dir()
+    identity = bundle_identity(resources_app, version, commit)
+    pointer = os.path.join(root, identity, "active.json")
+    if not os.path.isfile(pointer):
+        return None
+    with open(pointer, "r", encoding="utf-8") as handle:
+        active = json.load(handle)
+    manifest_path = os.path.join(root, identity, active["manifest_id"], "manifest.json")
+    if not os.path.isfile(manifest_path):
+        return None
+    with open(manifest_path, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    manifest["_manifest_dir"] = os.path.dirname(manifest_path)
+    manifest["_pointer_path"] = pointer
+    return manifest
+
+
+def restore_from_manifest(
+    report: PreflightReport,
+    *,
+    backup_root: Optional[str] = None,
+    keep_backups: bool = True,
+) -> Dict:
+    if report.cursor_running:
+        raise TransactionError("Cursor 仍在运行，拒绝恢复", EXIT_CURSOR_RUNNING)
+
+    manifest = load_active_manifest(
+        report.resources_app, report.version, report.commit, backup_root
+    )
+    if not manifest:
+        # 尝试 legacy 旁路 .bak 恢复（仅当哈希可验证且无版本化 manifest）
+        raise TransactionError(
+            "未找到匹配当前 Cursor 版本/commit 的活动 manifest。"
+            "若刚升级 Cursor，旧备份属于上一版本，已拒绝错误恢复。"
+            "请使用官方 DMG 重装，或在匹配版本上执行 restore。",
+            EXIT_NEEDS_RECOVERY,
+        )
+
+    if manifest.get("cursor_version") != report.version or manifest.get("cursor_commit") != report.commit:
+        raise TransactionError(
+            f"manifest 版本不匹配: manifest={manifest.get('cursor_version')}"
+            f"@{manifest.get('cursor_commit')} current={report.version}@{report.commit}",
+            EXIT_NEEDS_RECOVERY,
+        )
+
+    if manifest.get("status") != "applied":
+        raise TransactionError(
+            f"manifest 状态不可恢复: {manifest.get('status')}",
+            EXIT_NEEDS_RECOVERY,
+        )
+
+    manifest_dir = manifest["_manifest_dir"]
+    restored = []
+    for op in manifest.get("operations", []):
+        abs_path = op["absolute_path"]
+        action = op["action"]
+        expected_applied = op.get("result_sha256")
+        original_sha = op.get("original_sha256")
+        backup_name = op.get("backup_name")
+
+        if not os.path.exists(abs_path) and action == "create":
+            restored.append(abs_path)
+            continue
+
+        if os.path.isfile(abs_path) and expected_applied:
+            actual = sha256_file(abs_path)
+            if actual != expected_applied:
+                # 可能存在非重叠漂移：若是 html，尝试局部移除
+                if abs_path.endswith("workbench.html"):
+                    with open(abs_path, "r", encoding="utf-8") as handle:
+                        content = handle.read()
+                    if INJECTION_MARKER in content or INJECTION_BEGIN in content:
+                        try:
+                            cleaned = remove_tool_injection(content)
+                            atomic_write_text(abs_path, cleaned)
+                            restored.append(abs_path)
+                            continue
+                        except Exception as error:
+                            raise TransactionError(
+                                f"重叠/歧义漂移，拒绝恢复 {abs_path}: {error}",
+                                EXIT_INCOMPATIBLE,
+                            )
+                raise TransactionError(
+                    f"文件自安装后已被其他修改，拒绝整文件覆盖: {abs_path}",
+                    EXIT_INCOMPATIBLE,
+                )
+
+        if action == "create" and not op.get("original_exists"):
+            if os.path.isfile(abs_path):
+                # 确认仍是本工具文件
+                with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    head = handle.read(2048)
+                if TOOL_NAME in head or "cursor-v3-chinese-translate" in head or "Cursor 汉化脚本" in head:
+                    os.remove(abs_path)
+                else:
+                    raise TransactionError(
+                        f"拒绝删除非本工具文件: {abs_path}",
+                        EXIT_INCOMPATIBLE,
+                    )
+            restored.append(abs_path)
+            continue
+
+        if backup_name:
+            backup_path = os.path.join(manifest_dir, backup_name)
+            if not os.path.isfile(backup_path):
+                raise TransactionError(f"缺少备份: {backup_path}", EXIT_NEEDS_RECOVERY)
+            if original_sha and sha256_file(backup_path) != original_sha:
+                raise TransactionError(f"备份损坏: {backup_path}", EXIT_NEEDS_RECOVERY)
+            shutil.copy2(backup_path, abs_path)
+            if original_sha and sha256_file(abs_path) != original_sha:
+                raise TransactionError(f"恢复后哈希不匹配: {abs_path}", EXIT_ERROR)
+            restored.append(abs_path)
+
+    manifest["status"] = "restored"
+    atomic_write_text(
+        os.path.join(manifest_dir, "manifest.json"),
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+    )
+    # 清除 active 指针
+    pointer = manifest.get("_pointer_path")
+    if pointer and os.path.isfile(pointer):
+        os.remove(pointer)
+
+    # 默认保留备份；keep_backups=False 时仍保留 manifest 审计，仅提示
+    return {
+        "restored": restored,
+        "manifest_id": manifest.get("manifest_id"),
+        "keep_backups": keep_backups,
+    }
+
+
+def status_report(report: PreflightReport, backup_root: Optional[str] = None) -> Dict:
+    manifest = load_active_manifest(
+        report.resources_app, report.version, report.commit, backup_root
+    )
+    if report.legacy_marker and not manifest:
+        state = "legacy-installation"
+        code = EXIT_NEEDS_RECOVERY
+    elif not manifest:
+        # 检查是否有其他 identity 的备份（升级后）
+        root = backup_root or backup_root_dir()
+        identity_dir = os.path.join(root, bundle_identity(report.resources_app, report.version, report.commit))
+        if report.existing_tool_marker:
+            state = "drifted"
+            code = EXIT_NEEDS_RECOVERY
+        else:
+            state = "not-installed"
+            code = EXIT_OK
+    else:
+        status = manifest.get("status")
+        if status == "applied":
+            # 验证是否仍匹配
+            drifted = False
+            for op in manifest.get("operations", []):
+                path = op["absolute_path"]
+                expected = op.get("result_sha256")
+                if expected and os.path.isfile(path) and sha256_file(path) != expected:
+                    drifted = True
+                    break
+            state = "drifted" if drifted else "installed"
+            code = EXIT_NEEDS_RECOVERY if drifted else EXIT_OK
+        elif status in {"applying", "rolling_back", "prepared"}:
+            state = "needs-recovery"
+            code = EXIT_NEEDS_RECOVERY
+        elif status == "restored":
+            state = "not-installed"
+            code = EXIT_OK
+        else:
+            state = status or "unknown"
+            code = EXIT_OK
+    return {
+        "state": state,
+        "exit_code": code,
+        "manifest_id": (manifest or {}).get("manifest_id"),
+        "cursor_version": report.version,
+        "cursor_commit": report.commit,
+    }

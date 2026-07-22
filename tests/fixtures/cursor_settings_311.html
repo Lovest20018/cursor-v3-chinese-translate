@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Cursor Settings Fixture</title></head>
+<body>
+  <div id="workbench">
+    <!-- Cursor Settings root: sidebar + content -->
+    <div class="cursor-settings-layout-main" data-fixture="cursor-settings">
+      <nav class="cursor-settings-sidebar" aria-label="Settings">
+        <div class="cursor-settings-sidebar-search">
+          <input type="text" placeholder="Search settings" aria-label="Search Settings" />
+        </div>
+        <div class="cursor-settings-sidebar-nav">
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="General">General</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Agents">Agents</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Cloud Agents">Cloud Agents</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Models">Models</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Git &amp; PRs">Git &amp; PRs</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Plugins">Plugins</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Rules, Skills, Subagents">Rules, Skills, Subagents</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Tools &amp; MCPs">Tools &amp; MCPs</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Hooks">Hooks</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Browser &amp; Network">Browser &amp; Network</span>
+          </div>
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-nav-cell" role="button">
+            <i class="cursor-icon ui-icon"></i>
+            <span class="cursor-settings-sidebar-cell-label" title="Indexing &amp; Docs">Indexing &amp; Docs</span>
+          </div>
+        </div>
+        <div class="cursor-settings-sidebar-footer">
+          <div class="cursor-settings-sidebar-cell cursor-settings-sidebar-footer-cell">
+            <span class="cursor-settings-sidebar-cell-label">Manage your account and billing</span>
+          </div>
+        </div>
+      </nav>
+      <main class="cursor-settings-pane-content">
+        <div class="cursor-settings-pane-content-inner">
+          <div class="cursor-settings-inline-banner">
+            <div class="cursor-settings-inline-banner__title">Meet the new Agents Window</div>
+            <div class="cursor-settings-inline-banner__description">Run many agents in parallel</div>
+          </div>
+          <section class="cursor-settings-section">
+            <h2>Preferences</h2>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">Editor Settings</div>
+              <div class="cursor-settings-cell-description">Configure the editor</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">Keyboard Shortcuts</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">Import Settings from VS Code</div>
+              <div class="cursor-settings-cell-description">Import settings, extensions, and keybindings from VS Code</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">Window Layout</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">Conversation Density</div>
+              <div class="cursor-settings-cell-description">Choose how much detail Agent tool calls show in the conversation</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">System Notifications</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">Menu Bar Icon</div>
+              <div class="cursor-settings-cell-description">Show Cursor in menu bar</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <div class="cursor-settings-cell-label">Privacy Mode</div>
+            </div>
+            <div class="cursor-settings-cell">
+              <button type="button">Log Out</button>
+            </div>
+          </section>
+          <section class="cursor-settings-section" data-section="models">
+            <h2>Models</h2>
+            <div role="listbox" aria-label="Model picker">
+              <div role="option">claude-4-sonnet</div>
+              <div role="option">gpt-5</div>
+              <div role="option">Auto</div>
+              <div role="option">High</div>
+            </div>
+            <div class="cursor-settings-cell-label">Default model effort</div>
+          </section>
+          <section class="cursor-settings-section">
+            <input id="user-input" value="do not translate this value" />
+            <textarea>user authored content</textarea>
+            <code>const x = 1</code>
+            <pre class="monaco-editor"><div class="view-lines">function hello() {}</div></pre>
+            <span data-path="/Users/example/project">/Users/example/project</span>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <!-- VS Code Settings should remain untouched by Cursor-owned translation preference -->
+    <div class="settings-editor">
+      <div class="settings-header">
+        <div class="settings-header-widget">
+          <input class="settings-search-input" placeholder="Search settings" />
+        </div>
+      </div>
+      <div class="settings-body">
+        <div class="settings-toc-container">
+          <div class="settings-toc-list">
+            <div class="settings-toc-entry">Text Editor</div>
+          </div>
+        </div>
+        <div class="settings-tree-container">
+          <div class="setting-item">
+            <div class="setting-item-contents">
+              <div class="setting-item-label">Font Size</div>
+              <div class="setting-item-description">Controls the font size in pixels.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

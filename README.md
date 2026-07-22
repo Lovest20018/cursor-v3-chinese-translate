@@ -1,188 +1,227 @@
-# Cursor V3 Chinese Translate
+# Cursor V3 中文增强翻译
 
-> Cursor V3 中文增强翻译脚本。通过注入前端翻译脚本，并按需补丁少量 Electron 原生菜单资源，补全 Cursor 自定义 UI、设置页、插件页、MCP、欢迎页和输入框右键菜单等官方 VS Code 中文语言包覆盖不到的英文内容。
+面向 **Cursor 3.x** 的自定义界面汉化工具。在官方 VS Code 简体中文语言包之外，补全 Cursor 自有 **Settings、Agents、Models、Tools & MCPs、插件与动态状态** 等英文界面。
 
-## 主要特性
+> 本仓库在社区汉化方案基础上，针对 **Cursor 3.11.13（macOS Apple Silicon）** 做了完整适配与工程化加固，可独立使用。
 
-- **增强 Cursor UI 汉化**：覆盖设置页、插件页、MCP、Agent、Composer、欢迎页、动态状态文本等 Cursor 自定义界面。
-- **轻量 DOM 翻译**：翻译文本节点以及 `title`、`aria-label`、`placeholder`、`aria-placeholder`、`aria-description` 等属性，监听后加载内容。
-- **性能保护**：动态翻译队列去重、分帧处理，队列过大时合并为兜底重扫，减少卡顿和漏翻。
-- **高风险区域跳过**：默认跳过编辑器、终端、webview、iframe 等区域，避免影响代码编辑、终端输出和嵌入内容。
-- **不替换官方语言包**：不覆盖 VS Code 官方中文语言包，只补充 Cursor 自定义 UI 中未覆盖的英文内容。
-- **少量原生菜单汉化**：对白名单内 Electron 原生菜单、输入框右键菜单、托盘菜单词条进行资源替换，例如 `Undo`、`Redo`、`Cut`、`Paste`、`Select All`。
-- **可恢复**：自动备份并恢复 `workbench.html`、`product.json`，以及存在且需要更新时的 `out/main.js`、`out/nls.messages.json`。
+## 已验证版本
+
+| 项目 | 值 |
+|------|-----|
+| Cursor | **3.11.13** |
+| Commit | `3f21b08f0b436a07be29fbfe00b304fa15553350` |
+| 平台 | macOS ARM64（Apple Silicon） |
+| 路径 | `/Applications/Cursor.app` 及多种入口形式 |
+
+Windows / Linux 路径解析保留兼容，但当前以 macOS 3.11.13 为主要验收目标。
+
+## 功能概览
+
+- **Cursor Settings 汉化**：侧栏与内容区（通用、智能体、模型、工具与 MCP、浏览器与网络等）
+- **动态 UI 翻译**：文本节点 + `title` / `aria-label` / `placeholder` 等属性
+- **Solid/React 重渲染容忍**：节点状态跟踪，框架写回英文后会再次翻译，并抑制自身写入死循环
+- **上下文保护**：模型名、Provider、代码、路径、用户输入、Chat/Agent 输出、VS Code 原生设置等默认不译
+- **事务式安装**：版本化备份 manifest、原子写入、失败整单回滚
+- **只读诊断**：`--check` / `--status` / `--dry-run` 不修改任何文件
+- **可恢复**：`--restore` 仅撤销本工具改动，并校验 Cursor 版本/commit
+- **共存友好**：不删除其他补丁工具生成的 `backup-*` / marker
 
 ## 环境要求
 
-- Python 3
-- 本地已安装 Cursor
-- 对 Cursor 安装目录具有写入权限
+- Python 3（仅标准库）
+- 已安装 Cursor，并对安装目录可写
+- **应用或恢复前请完全退出 Cursor**
 
-项目仅使用 Python 标准库，不依赖第三方 Python 包。
+可选（开发测试）：
 
-## 快速使用
+- Node.js 22+
+- `npm test`（jsdom DOM 测试）
 
-> 运行 `--apply` 或 `--restore` 前，请先完全关闭 Cursor。原生菜单资源修改后必须完整重启 Cursor 才会生效。
-
-应用汉化：
+## 快速开始
 
 ```bash
-python CursorTranslate.py --apply
+git clone https://github.com/zbsdsb/cursor-v3-chinese-translate.git
+cd cursor-v3-chinese-translate
+
+# 预检（只读）
+python3 CursorTranslate.py --check
+
+# 应用汉化
+python3 CursorTranslate.py --apply
+
+# 恢复本工具修改
+python3 CursorTranslate.py --restore
 ```
 
-恢复原始文件并清理本工具生成的备份：
+指定安装路径：
 
 ```bash
-python CursorTranslate.py --restore
-```
-
-保留备份文件：
-
-```bash
-python CursorTranslate.py --restore --keep-backups
-```
-
-指定 Cursor 安装目录：
-
-```bash
-python CursorTranslate.py --apply --cursorDir="D:\Tools\cursor"
 python3 CursorTranslate.py --apply --cursorDir="/Applications/Cursor.app"
 python3 CursorTranslate.py --apply --cursorDir="/Applications/Cursor.app/Contents/Resources/app"
+python3 CursorTranslate.py --apply --cursorDir="~/Applications/Cursor.app"
 ```
 
-查看帮助：
+Windows / Linux 示例：
 
 ```bash
-python CursorTranslate.py --help
+python CursorTranslate.py --apply --cursorDir="%LocalAppData%\Programs\cursor"
+python3 CursorTranslate.py --apply --cursorDir="/opt/Cursor"
 ```
+
+## 命令说明
+
+| 命令 | 作用 |
+|------|------|
+| `--check` | 报告版本、commit、路径、注入锚点、checksum、冲突与计划写入；**零写入** |
+| `--status` | 安装状态：`not-installed` / `installed` / `drifted` / `needs-recovery` 等 |
+| `--dry-run` | 预检 + 打印精确写入计划（前后哈希） |
+| `--apply` | 事务式写入汉化 |
+| `--restore` | 按活动 manifest 恢复；版本不匹配则拒绝 |
+| `--extract-source-strings` | 从打包源码提取候选词条（**不会**自动写入词典） |
+| `--cleanup-legacy` | 清理早期语言包残留 |
+
+退出码：`0` 正常；`2` 布局/冲突不兼容；`3` Cursor 仍在运行；`4` 需恢复/陈旧状态；`1` 其他错误。
 
 ## 默认路径
 
 ### Cursor 安装目录
 
-- Windows 用户级安装：`%LocalAppData%\Programs\cursor`
-- Windows 系统级安装：`C:\Program Files\cursor`
 - macOS：`/Applications/Cursor.app` 或 `~/Applications/Cursor.app`
+- Windows 用户级：`%LocalAppData%\Programs\cursor`
+- Windows 系统级：`C:\Program Files\cursor`
 - Linux：`/usr/share/cursor`、`/opt/Cursor`、`/opt/cursor`
 
-`--cursorDir` 可以指向 Cursor 安装根目录，也可以直接指向 `resources/app`；macOS 下也支持指向 `Cursor.app`、`Cursor.app/Contents` 或 `Cursor.app/Contents/Resources/app`。
+`--cursorDir` 可指向：
 
-## 翻译词典
+- 安装根目录
+- `Cursor.app`
+- `Cursor.app/Contents`
+- `Contents/Resources/app` / `resources/app`
 
-默认词典文件：
+### 备份目录（在 App 之外）
 
-```text
-cursor_translate_dic.txt
-```
+- macOS：`~/Library/Application Support/cursor-v3-chinese-translate/backups/`
+- Windows：`%APPDATA%\cursor-v3-chinese-translate\backups\`
+- Linux：`${XDG_DATA_HOME:-~/.local/share}/cursor-v3-chinese-translate/backups/`
 
-词典每行使用 `=>` 分隔原文和译文：
+每个 manifest 记录：工具名/版本、manifest id、Cursor version/commit、文件相对路径、原始与应用后 SHA-256。
+
+## 词典
+
+默认文件：`cursor_translate_dic.txt`
 
 ```text
 "Settings" => "设置"
-"Open project" => "打开项目"
-"Prevent \"Connection failed\" errors" => "防止出现“Connection failed”错误"
+"Git & PRs" => "Git 与 PR"
+
+# [Cursor 3.11 Settings Navigation]
+"Browser & Network" => "浏览器与网络"
 ```
 
-以下内容会被忽略：
+规则：
 
-- 空行
-- 以 `#` 开头的行
-- 以 `//` 开头的行
+- 空行、`#` / `//` 注释忽略
+- 支持分组注释
+- 重复键、冲突翻译、空键值会在加载时失败
+- **不要**把 `--extract-source-strings` 的全量候选直接导入词典
 
-当前词典主要覆盖：
-
-- Cursor 设置页、欢迎页、顶部栏和常见菜单
-- Agent / Composer / Chat 动态状态和工具调用时间线
-- 插件 Marketplace、MCP、索引、网络、钩子、自动运行相关设置
-- 少量 Electron 原生菜单、输入框右键菜单、托盘菜单白名单词条
-
-如果仍有英文，截图后把准确原文补进 `cursor_translate_dic.txt`，再重新执行 `--apply` 并重启 Cursor。
-
-## 词条候选提取
-
-从 Cursor 打包源码中提取可能需要翻译的候选文案：
-
-```bash
-python CursorTranslate.py --extract-source-strings --limit=200
-```
-
-该命令只打印候选结果，不修改词典，也不写入 Cursor 安装目录。不要把结果全量加入词典；源码里会包含内部状态、错误码、命令 ID、快捷键、模型名和服务名。只补确认会显示在 Cursor 自定义 UI 中的文案。
-
-## 旧版本清理
-
-清理早期版本可能写入的 `languagepacks.json`、`cursor-local-zh-cn` 和相关缓存：
-
-```bash
-python CursorTranslate.py --cleanup-legacy
-```
-
-该命令会检查文件标记，只清理确认由本工具创建的文件。
+若仍有英文：复制界面上的**完整原文**加入词典，重新 `--apply` 并完整重启 Cursor。
 
 ## 修改范围
 
-应用时可能修改以下 Cursor 安装目录文件：
+可能写入：
 
 - `out/vs/code/electron-sandbox/workbench/workbench.html`
-- `product.json`
-- `out/main.js`（存在且有匹配词条时，仅替换白名单内原生菜单字符串）
-- `out/nls.messages.json`（存在且有匹配词条时，仅替换白名单内原生菜单字符串）
+- `out/vs/code/electron-sandbox/workbench/cursor_hanhua.js`（生成）
+- `product.json`（仅 workbench.html 的 checksum）
+- `out/main.js` / `out/nls.messages.json`（仅白名单原生菜单字符串，且要求唯一匹配）
 
-恢复时默认删除当前备份和历史轮转备份，例如：
+只读参考：`workbench.desktop.main.js`（候选提取 / 兼容检查）。
 
-- `workbench.html.bak`
-- `product.json.bak`
-- `main.js.bak`
-- `nls.messages.json.bak`
-- `workbench.html.bak.20260531123456`
+## 升级 Cursor 之后
 
-如需保留备份，请使用 `--restore --keep-backups`。
+1. 完全退出 Cursor  
+2. 若旧版本曾安装本工具：在**旧版本**上 `--restore`，或直接用官方安装包重装  
+3. 对新版本执行 `--check`  
+4. `--apply`  
+5. 启动验证 Cursor Settings / 智能体相关页面  
 
-## 常见问题
+旧 manifest 绑定旧 version/commit，升级后 `--restore` 会拒绝错误恢复，避免用过期备份覆盖新版本文件。
 
-### 仍有部分英文没有翻译
+## 与其他补丁工具共存
 
-常见原因：Cursor 新版本增加了文案、原文与词典不完全一致、文本被拆成多个 DOM 节点、或属于未加入白名单的原生菜单项。
+可能同时存在：
 
-处理方式：补充准确原文到 `cursor_translate_dic.txt`，重新执行 `--apply` 并完整重启 Cursor。不要把 VS Code 内置设置项大面积加入词典。
+- `@cometix/ccursor`
+- Cursor++ BYOK
+- cursor-always-local
+- 其他 renderer / checksum 补丁
 
-### 输入框右键菜单仍是英文
+本工具：
 
-输入框右键菜单属于 Electron/Chromium 原生菜单，不在 DOM 中。当前脚本只处理白名单内少量高频原生菜单词条。
+- 使用独立 marker（含工具名、版本、manifest id）
+- **不删除** 外部 `.bak` / `backup-*`
+- 锚点重叠或不可逆冲突时默认停止并提示
+- restore 只移除本工具注入与已记录改动
 
-如果未生效，请确认：
+## Apple 代码签名（重要）
 
-1. 已完全关闭 Cursor 后执行 `--apply`
-2. 执行过程中没有权限错误
-3. 已完整重启 Cursor，而不是只刷新窗口
-4. 当前 Cursor 版本的原生资源中存在对应英文词条
+修改 `Cursor.app` 内部资源会使 Apple sealed-resource 验证失效。
 
-### Cursor 更新后汉化失效
+- `codesign --verify --deep --strict` **可能失败**
+- 更新 `product.json` checksum **只**解决 Cursor 自身资源校验，**不能**恢复 Apple Developer ID 签名
+- Gatekeeper 结果需自行验证
+- 请保留官方安装包 / DMG 作为灾难回退
+- **不建议**关闭 SIP
+- **不建议**删除 `com.apple.macl`
+- **不建议** `chmod -R 777`
+- 本工具**不会**、也**不能**重新生成 Cursor 官方签名
 
-Cursor 更新可能覆盖 `workbench.html` 或原生菜单资源，重新执行：
+## 安全边界
+
+- 默认纯汉化：**不读取** Cursor 登录 token、邮箱、`state.vscdb` 或本地认证库
+- **不访问网络**，不上传任何文件
+- 不把 token 编入 `cursor_hanhua.js`
+- 不包含用量监控 / 账户 API 功能
+
+## 测试
 
 ```bash
-python CursorTranslate.py --apply
+python3 -m py_compile CursorTranslate.py
+python3 -m unittest -v
+python3 -m unittest discover -s tests -v
+python3 smoke_test.py
+npm ci
+npm test
 ```
 
-### Cursor 提示安装损坏
-
-脚本会更新 `product.json` 校验值。若之前手动修改过文件，可尝试：
+对生成脚本：
 
 ```bash
-python CursorTranslate.py --restore
-python CursorTranslate.py --apply
+node --check path/to/cursor_hanhua.js
 ```
 
-### 找不到 `workbench.html`
+## 项目结构
 
-使用 `--cursorDir` 指定实际安装目录，或直接指定 `resources/app` 目录。
+```text
+CursorTranslate.py          # CLI 入口
+cursor_translate/           # 核心模块（路径、词典、事务、运行时）
+cursor_translate_dic.txt    # 翻译词典
+tests/                      # 单元测试与 DOM fixture
+docs/verification/          # 验收记录（无账号/隐私数据）
+```
 
-## 安全说明
+## 致谢与渊源
 
-- 脚本不读取 Cursor 登录信息、本地 token 或本地数据库。
-- 脚本不访问网络，也不会上传本地文件。
-- 修改安装目录前会自动备份关键文件。
-- 原生资源只替换白名单内菜单字符串，不对打包资源做全量翻译。
-- 编辑器、终端、webview、iframe 等高风险区域默认跳过，避免影响代码和嵌入内容。
+- 早期社区汉化思路与词典积累来自相关开源项目贡献者
+- 本仓库当前维护目标：Cursor 3.11 Settings/Agents 真实 UI 可用、可恢复、可与其他补丁共存
 
-该项目会修改 Cursor 安装目录内文件，请自行评估风险，并建议保留备份。
+如上游仓库暂未合并适配改动，可直接使用本仓库的发布分支。
+
+## 免责声明
+
+本项目会修改 Cursor 安装目录中的文件，可能影响自动更新、完整性校验与系统签名验证。请自行评估风险，使用前备份，并保留官方安装包以便回退。与 Cursor / Anysphere 官方无隶属关系。
+
+## License
+
+请遵循仓库内既有许可声明；贡献代码前建议先开 Issue 讨论大范围改动。

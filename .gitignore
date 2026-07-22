@@ -1,4 +1,9 @@
 .trae
 .vscode
 .claude/
+.worktrees/
 __pycache__
+node_modules/
+artifacts/
+*.pyc
+.DS_Store

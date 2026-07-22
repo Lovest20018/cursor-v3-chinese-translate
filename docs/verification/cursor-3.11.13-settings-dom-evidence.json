@@ -1,0 +1,27 @@
+{
+  "cursorVersion": "3.11.13",
+  "commit": "3f21b08f0b436a07be29fbfe00b304fa15553350",
+  "sidebarLabels": [
+    "通用",
+    "智能体",
+    "云端智能体",
+    "模型",
+    "Git 与 PR",
+    "插件",
+    "规则、技能、子智能体",
+    "工具与 MCP",
+    "钩子",
+    "浏览器与网络",
+    "索引与文档",
+    "管理您的账户和账单"
+  ],
+  "containsChinese": {
+    "general": true,
+    "agents": true,
+    "models": true,
+    "tools": true,
+    "browser": true,
+    "git": true
+  },
+  "sample": "通用 智能体 云端智能体 模型 Git 与 PR 插件 规则、技能、子智能体 工具与 MCP 钩子 浏览器与网络 索引与文档 管理您的账户和账单 认识全新的智能体窗口 Run many agents in parallel 首选项 编辑器设置 Configure the editor 键盘快捷键 从 VS Code 导入设置 Import settings, extensions, and keybindings from VS Code 窗口布局 对话密度 Choose how much detail Agent tool calls show in the conversation 系统通知 菜单栏图标 Show Cursor in menu bar 隐私模式 退出登录 模型 claude-4-sonnet gpt-5 Auto High Default model effort user authored content const x = 1 function hello() {} /Users/example/project Text Editor Font Size Con"
+}
