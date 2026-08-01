@@ -14,6 +14,8 @@ from CursorTranslate import (
     MACOS_CONTENTS_APP_RELATIVE_DIR,
     parse_translation_entry,
     generate_js_code,
+    get_native_resource_translations,
+    NATIVE_MENU_TRANSLATION_KEYS,
     RUNTIME_PROTECTED_EXACT_TEXTS,
     resolve_cursor_app_path,
     remove_injected_script,
@@ -77,6 +79,28 @@ class TestGenerateJsCode(unittest.TestCase):
 
         self.assertIn(f"const protectedExactTexts = new Set({protected_exact_texts_json});", js_code)
         self.assertIn("protectedExactTexts.has(normalizeTranslationWhitespace(text))", js_code)
+
+    def test_generated_js_disables_system_notification_translation(self):
+        """默认不包装系统通知，避免影响 Cursor 的完成与关注提醒"""
+        js_code = generate_js_code({
+            "Done • Application settings": "已完成 • 应用设置",
+            "Open Cursor to view the agent's output.": "打开 Cursor 查看智能体的输出。",
+        })
+
+        self.assertIn("function installNotificationTranslator()", js_code)
+        self.assertIn("    // installNotificationTranslator();", js_code)
+        self.assertNotIn("\n    installNotificationTranslator();\n", js_code)
+
+    def test_native_resources_exclude_system_notification_text(self):
+        """原生资源替换不应改写系统通知的标题或正文"""
+        notification_texts = {
+            "Chat name generation instructions": "聊天名称生成指令",
+            "Done • Chat name generation instructions": "已完成 • 聊天名称生成指令",
+            "Open Cursor to view the agent's output.": "打开 Cursor 查看智能体的输出。",
+        }
+
+        self.assertTrue(set(notification_texts).isdisjoint(NATIVE_MENU_TRANSLATION_KEYS))
+        self.assertEqual(get_native_resource_translations(notification_texts), {})
 
 
 class TestRemoveInjectedScript(unittest.TestCase):
