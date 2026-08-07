@@ -77,6 +77,7 @@ class TestGenerateJsCode(unittest.TestCase):
         js_code = generate_js_code({protected_text: "误译" for protected_text in RUNTIME_PROTECTED_EXACT_TEXTS})
         protected_exact_texts_json = json.dumps(RUNTIME_PROTECTED_EXACT_TEXTS, ensure_ascii=False)
 
+        self.assertTrue({"Enable", "Enabled", "enabled", "Disable", "Disabled", "disabled"}.issubset(RUNTIME_PROTECTED_EXACT_TEXTS))
         self.assertIn(f"const protectedExactTexts = new Set({protected_exact_texts_json});", js_code)
         self.assertIn("protectedExactTexts.has(normalizeTranslationWhitespace(text))", js_code)
 
